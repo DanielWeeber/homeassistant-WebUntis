@@ -309,6 +309,7 @@
           "filter": "Filter",
           "lesson": "Stunden-Darstellung",
           "live_activities_menu": "Live-Stundenplan (Live Activities)",
+          "messages": "Mitteilungen",
           "notify_menu": "Benachrichtigungen"
         }
       },
@@ -337,6 +338,20 @@
           "remove_live_activity": "Live-Stundenplan löschen",
           "test_live_activity": "Live-Stundenplan testen"
         }
+      },
+      "messages": {
+        "data": {
+          "message_attachments": "Links zu Anhängen",
+          "message_attachments_unread": "Anhänge ungelesener Mitteilungen laden",
+          "messages": "Mitteilungen laden"
+        },
+        "data_description": {
+          "message_attachments": "Ergänzt den Mitteilungen-Sensor um Download-Links zu den Anhängen. Die Links erfordern eine Anmeldung in Home Assistant. Wirkt nur, wenn Mitteilungen aktiviert sind.",
+          "message_attachments_unread": "Öffnet auch ungelesene Mitteilungen, um ihre Anhänge zu laden. Achtung: Dadurch werden sie in WebUntis eventuell als gelesen markiert. Ohne diese Option bekommen ungelesene Mitteilungen einen einzelnen Link, der die Anhänge erst beim Öffnen lädt.",
+          "messages": "Legt den Mitteilungen-Sensor und das Ereignis für neue Mitteilungen an. Gelesen wird nur die Liste, Mitteilungen werden nicht als gelesen markiert."
+        },
+        "description": "WebUntis-Mitteilungen als Sensor, Ereignis und Benachrichtigung. Alle Optionen sind standardmäßig aus.",
+        "title": "Mitteilungen"
       },
       "notify_menu": {
         "menu_options": {

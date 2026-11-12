@@ -19,6 +19,7 @@ from .const import (
     MESSAGES_MAX_ATTRIBUTE,
     MESSAGES_MAX_ATTRIBUTE_BYTES,
     MESSAGES_MAX_TEXT_LENGTH,
+    MESSAGES_MIN_TEXT_LENGTH,
     NAME_SENSOR_HOMEWORK_LIST,
     NAME_SENSOR_MESSAGES,
     NAME_SENSOR_NEXT_CLASS,
@@ -47,8 +48,9 @@ async def async_setup_entry(
         WebUntisToayStart(server),
         WebUntisToayEnd(server),
         WebUntisHomeworkListSensor(server),
-        WebUntisMessagesSensor(server),
     ]
+    if server.messages_enabled:
+        entities.append(WebUntisMessagesSensor(server))
 
     # Add sensor entities.
     async_add_entities(entities, True)
@@ -232,5 +234,6 @@ class WebUntisMessagesSensor(WebUntisSensorEntity):
                 MESSAGES_MAX_ATTRIBUTE,
                 MESSAGES_MAX_TEXT_LENGTH,
                 MESSAGES_MAX_ATTRIBUTE_BYTES,
+                MESSAGES_MIN_TEXT_LENGTH,
             )
         }

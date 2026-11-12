@@ -28,7 +28,9 @@ from homeassistant.util import dt as dt_util
 
 from webuntis import errors
 
+from .attachments import WebUntisAttachmentView, async_add_attachment_links
 from .const import (
+    CONF_ATTACHMENT_VIEW_REGISTERED,
     CONF_FRONTEND_CARD_REGISTERED,
     CONF_LIVE_ACTIVITIES,
     CONFIG_ENTRY_VERSION,
@@ -48,7 +50,13 @@ from .notify import *
 from .services import async_setup_services
 from .utils.exams import return_exam_events
 from .utils.homework import return_homework_events
-from .utils.messages import fetch_messages, shorten_message
+from .utils.messages import (
+    RestApiError,
+    fetch_attachments,
+    fetch_messages,
+    messages_without_attachment_list,
+    shorten_message,
+)
 from .utils.qrLogin import QrData, parse_qr_code
 from .utils.schoolyears import resolve_schoolyear
 from .utils.utils import async_notify, compact_list
@@ -95,6 +103,15 @@ async def _async_register_frontend_card(hass: HomeAssistant) -> None:
         _LOGGER.warning("Could not register the WebUntis homework card: %s", error)
 
 
+def _async_register_attachment_view(hass: HomeAssistant) -> None:
+    """Register the message attachment view once per HA process."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if domain_data.get(CONF_ATTACHMENT_VIEW_REGISTERED):
+        return
+    domain_data[CONF_ATTACHMENT_VIEW_REGISTERED] = True
+    hass.http.register_view(WebUntisAttachmentView())
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up WebUntis from a config entry."""
     domain_data = hass.data.setdefault(DOMAIN, {})
@@ -112,6 +129,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     domain_data[unique_id] = server
 
     await _async_register_frontend_card(hass)
+    if server.message_attachments_enabled:
+        _async_register_attachment_view(hass)
 
     # Set up platforms.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -215,6 +234,8 @@ class WebUntis:
         """Initialize client instance."""
         self._hass = hass
         self._config: ConfigEntry = config
+        self.hass = hass
+        self.entry_id = config.entry_id
         config_data = config.data
 
         # Server data
@@ -339,7 +360,19 @@ class WebUntis:
         self.calendar_homework_ids_setup = False
         self.homework_list = []
         # Messages ("Mitteilungen"); disabled when the account has no access
-        self.messages_available = True
+        self.messages_enabled = config.options.get("messages", False)
+        # Attachment links only work together with messages
+        self.message_attachments_enabled = self.messages_enabled and config.options.get(
+            "message_attachments", False
+        )
+        # Also open unread messages to load their attachments (may mark them read)
+        self.message_attachments_unread = config.options.get(
+            "message_attachments_unread", False
+        )
+        self.messages_available = self.messages_enabled
+        # Attachment lists per message id (they do not change) and signed links
+        self.message_attachments: dict[Any, list[dict]] = {}
+        self.attachment_urls: dict[str, tuple[str, datetime]] = {}
         self.messages = []
         self.messages_unread = None
         self.messages_ids = []
@@ -363,6 +396,9 @@ class WebUntis:
         # Callback for stopping periodic update.
         self._stop_periodic_update: CALLBACK_TYPE | None = None
         self._qr_session_lock = asyncio.Lock()
+        # Serializes the periodic update and on-demand requests (attachment
+        # downloads), so neither logs out while the other still needs the session
+        self.session_lock = asyncio.Lock()
         self._qr_session_created_at: datetime | None = None
 
         self.lesson_change_callback: Callable[..., None] | None = None
@@ -392,7 +428,8 @@ class WebUntis:
     async def async_update(self, now: datetime | None = None) -> None:
         """Get server data from 3rd party library and update properties."""
 
-        await self._async_status_request()
+        async with self.session_lock:
+            await self._async_status_request()
 
         # Notify sensors about new data.
         async_dispatcher_send(self._hass, self.signal_name)
@@ -881,6 +918,9 @@ class WebUntis:
 
         self.messages_unread, self.messages = result
 
+        if self.message_attachments_enabled:
+            await self._async_update_message_attachments()
+
         if self.messages_ids_setup:
             # Oldest first, so notifications arrive in the order they were sent
             for message in reversed(self.messages):
@@ -890,6 +930,49 @@ class WebUntis:
             self.messages_ids_setup = True
 
         self.messages_ids = [message["id"] for message in self.messages]
+
+    async def _async_update_message_attachments(self) -> None:
+        """Load attachment lists once per message and add the download links."""
+        known = {message["id"] for message in self.messages}
+        for message_id in set(self.message_attachments) - known:
+            self.message_attachments.pop(message_id)
+
+        missing = messages_without_attachment_list(
+            self.messages, self.message_attachments, self.message_attachments_unread
+        )
+        if missing:
+            try:
+                loaded = await self._hass.async_add_executor_job(
+                    fetch_attachments, self.session, missing
+                )
+            except Exception as error:
+                _LOGGER.debug("Loading message attachments failed: %s", error)
+            else:
+                self.message_attachments.update(loaded)
+
+        async_add_attachment_links(self)
+
+    async def async_with_session(self, func: Callable[[], Any]) -> Any:
+        """Run func in the executor with a logged-in session (on demand).
+
+        Logs out again afterwards unless the session was already logged in.
+        """
+        async with self.session_lock:
+            was_logged_in = bool(self._loged_in)
+            if self.is_qr:
+                if not await self._async_ensure_valid_session():
+                    raise RestApiError("Login to WebUntis failed")
+            else:
+                login_error = await self._hass.async_add_executor_job(
+                    self.webuntis_login
+                )
+                if login_error:
+                    raise RestApiError(f"Login to WebUntis failed: {login_error}")
+            try:
+                return await self._hass.async_add_executor_job(func)
+            finally:
+                if not was_logged_in:
+                    await self._hass.async_add_executor_job(self.webuntis_logout)
 
     async def _async_new_message(self, message: dict) -> None:
         """Fire the event and send notifications for a new message."""
