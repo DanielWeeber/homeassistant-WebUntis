@@ -75,13 +75,16 @@ messages:
     text: Liebe Eltern, ...
     attachments: # only with the "Attachment links" option
       - name: 2025-02-18-Elternbrief.pdf
-        url: /api/webuntis/<entry_id>/messages/12345/attachments/<attachment_id>?authSig=...
+        url: /api/webuntis/<entry_id>/messages/12345/attachments/<attachment_id>?token=...
 ```
 
 With the option **Attachment links**, every message has a list `attachments` with the file `name` and a
-`url`. Open the url in the browser (e.g. as a link or button in a dashboard) to download the file. The links
-only work for users logged in to Home Assistant; they expire after 7 days and are renewed automatically
-while the message is in the list. Files are not stored in Home Assistant.
+`url`. Open the url in the browser (e.g. as a link or button in a dashboard) to download the file. The url is
+relative and contains a link token (HMAC, bound to this file), so it also works where there is no Home
+Assistant session, e.g. when the Companion app opens it from a push notification. Anyone who has the link
+can open that file until the token expires after 7 days, so treat links like passwords. Tokens are renewed
+automatically while the message is in the list and stay valid across restarts. Requests of logged-in users
+are accepted without a token. Other query parameters are ignored. Files are not stored in Home Assistant.
 
 To load the attachment names, the integration has to open the message in WebUntis. It does this only for
 messages that are already read. An unread message with attachments gets a single entry

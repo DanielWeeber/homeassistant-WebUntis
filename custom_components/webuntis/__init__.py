@@ -28,7 +28,11 @@ from homeassistant.util import dt as dt_util
 
 from webuntis import errors
 
-from .attachments import WebUntisAttachmentView, async_add_attachment_links
+from .attachments import (
+    WebUntisAttachmentView,
+    async_add_attachment_links,
+    async_load_link_secret,
+)
 from .const import (
     CONF_ATTACHMENT_VIEW_REGISTERED,
     CONF_FRONTEND_CARD_REGISTERED,
@@ -103,8 +107,9 @@ async def _async_register_frontend_card(hass: HomeAssistant) -> None:
         _LOGGER.warning("Could not register the WebUntis homework card: %s", error)
 
 
-def _async_register_attachment_view(hass: HomeAssistant) -> None:
-    """Register the message attachment view once per HA process."""
+async def _async_setup_attachment_links(hass: HomeAssistant) -> None:
+    """Load the link secret and register the attachment view once per process."""
+    await async_load_link_secret(hass)
     domain_data = hass.data.setdefault(DOMAIN, {})
     if domain_data.get(CONF_ATTACHMENT_VIEW_REGISTERED):
         return
@@ -130,7 +135,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await _async_register_frontend_card(hass)
     if server.message_attachments_enabled:
-        _async_register_attachment_view(hass)
+        await _async_setup_attachment_links(hass)
 
     # Set up platforms.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

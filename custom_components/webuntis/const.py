@@ -100,7 +100,7 @@ MESSAGES_MAX_TEXT_LENGTH = 1000
 MESSAGES_MAX_ATTRIBUTE_BYTES = 12000
 # Texts are shortened down to this length before older messages are dropped
 MESSAGES_MIN_TEXT_LENGTH = 200
-# Signed attachment links (HA login required) and when they are renewed
+# Attachment link tokens: validity and when they are renewed
 MESSAGES_ATTACHMENT_URL_EXPIRY = 7 * 24 * 60 * 60  # 7 days
 MESSAGES_ATTACHMENT_URL_RENEW = 24 * 60 * 60  # renew when less than 1 day is left
 # Name of the single link shown for attachments that have not been loaded yet

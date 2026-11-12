@@ -70,7 +70,7 @@ options, choose **Messages** and enable **Load messages**.
 | Option                     | Description                                                                                                                                               | Default |
 | :------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- | :------ |
 | messages                   | Adds `sensor.<name>_messages` and `event.<name>_new_message` and enables the `message` notification option. Messages are not marked as read.             | `False` |
-| message_attachments        | Adds download links for attachments to the messages (`attachments`). Links require a Home Assistant login. Only has an effect when `messages` is enabled. | `False` |
+| message_attachments        | Adds download links for attachments to the messages (`attachments`). Links contain a token valid for 7 days. Only has an effect when `messages` is enabled. | `False` |
 | message_attachments_unread | Also opens unread messages to load their attachments. **This may mark them as read in WebUntis.**                                                         | `False` |
 
 ### Backend Options

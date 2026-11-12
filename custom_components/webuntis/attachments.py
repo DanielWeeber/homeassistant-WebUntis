@@ -1,14 +1,22 @@
 """Download links for the attachments of WebUntis messages ("Mitteilungen").
 
-Attachments are served by an authenticated Home Assistant view. The sensor
-attribute contains signed paths (authSig), so a logged-in user can open them
-directly in the browser; nothing is stored in /local, www or the media folder.
+Attachments are served by a Home Assistant view. The sensor attribute contains
+relative links with an integration token (HMAC over entry, message, attachment
+and expiry). The token is checked instead of HA's authSig because apps add
+query parameters (e.g. the companion app adds external_auth=1), which an authSig
+does not allow. Requests of logged-in users are accepted without a token.
+Nothing is stored in /local, www or the media folder.
 """
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import hashlib
+import hmac
 import logging
 import mimetypes
+import secrets
 from datetime import datetime, timedelta
 from html import escape
 from http import HTTPStatus
@@ -16,9 +24,9 @@ from typing import TYPE_CHECKING, ClassVar
 from urllib.parse import quote
 
 from aiohttp import web
-from homeassistant.components.http import HomeAssistantView
-from homeassistant.components.http.auth import async_sign_path
+from homeassistant.components.http import KEY_AUTHENTICATED, HomeAssistantView
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -35,6 +43,68 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+STORAGE_KEY = "webuntis.attachment_links"
+STORAGE_VERSION = 1
+DATA_LINK_SECRET = "attachment_link_secret"
+DATA_LINK_SECRET_LOCK = "attachment_link_secret_lock"
+TOKEN_PARAM = "token"
+
+
+async def async_load_link_secret(hass: HomeAssistant) -> bytes:
+    """Load (or create once) the secret for attachment link tokens.
+
+    It is kept in .storage, so links sent earlier keep working after a restart.
+    """
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if DATA_LINK_SECRET in domain_data:
+        return domain_data[DATA_LINK_SECRET]
+    lock = domain_data.setdefault(DATA_LINK_SECRET_LOCK, asyncio.Lock())
+    async with lock:
+        if DATA_LINK_SECRET not in domain_data:
+            store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY, private=True)
+            data = await store.async_load()
+            secret = None
+            if isinstance(data, dict) and isinstance(data.get("secret"), str):
+                try:
+                    secret = base64.urlsafe_b64decode(data["secret"])
+                except ValueError:
+                    secret = None
+            if not secret or len(secret) < 32:
+                secret = secrets.token_bytes(32)
+                await store.async_save(
+                    {"secret": base64.urlsafe_b64encode(secret).decode()}
+                )
+            domain_data[DATA_LINK_SECRET] = secret
+    return domain_data[DATA_LINK_SECRET]
+
+
+def _signature(secret: bytes, entry_id, message_id, attachment_id, exp: int) -> str:
+    message = f"{entry_id}/{message_id}/{attachment_id or 'list'}/{exp}"
+    digest = hmac.new(secret, message.encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+
+
+def make_token(secret: bytes, entry_id, message_id, attachment_id, exp: int) -> str:
+    """Return a link token "<exp>.<signature>"."""
+    return f"{exp}.{_signature(secret, entry_id, message_id, attachment_id, exp)}"
+
+
+def verify_token(
+    secret: bytes, token: str | None, entry_id, message_id, attachment_id, now: datetime
+) -> bool:
+    """Return True if the token is valid for this link and not expired."""
+    if not token or "." not in token:
+        return False
+    exp_text, signature = token.split(".", 1)
+    try:
+        exp = int(exp_text)
+    except ValueError:
+        return False
+    if exp <= now.timestamp():
+        return False
+    expected = _signature(secret, entry_id, message_id, attachment_id, exp)
+    return hmac.compare_digest(expected.encode(), signature.encode())
+
 
 def attachments_path(entry_id: str, message_id) -> str:
     """Return the view path for all attachments of a message."""
@@ -49,34 +119,54 @@ def attachment_path(entry_id: str, message_id, attachment_id: str) -> str:
 
 
 @callback
-def async_signed_url(
-    hass: HomeAssistant, cache: dict[str, tuple[str, datetime]], path: str
+def async_link(
+    secret: bytes,
+    cache: dict[str, tuple[str, datetime]],
+    entry_id: str,
+    message_id,
+    attachment_id: str | None = None,
 ) -> str:
-    """Return a signed path, re-signed only when it expires within a day.
+    """Return the relative link with token, renewed only when it expires within a day.
 
-    Keeping the URL stable avoids a new sensor state (and recorder row) every
+    Keeping the link stable avoids a new sensor state (and recorder row) every
     update.
     """
+    if attachment_id is None:
+        path = attachments_path(entry_id, message_id)
+    else:
+        path = attachment_path(entry_id, message_id, attachment_id)
     now = dt_util.utcnow()
     cached = cache.get(path)
     if cached and cached[1] - now > timedelta(seconds=MESSAGES_ATTACHMENT_URL_RENEW):
         return cached[0]
-    expiry = timedelta(seconds=MESSAGES_ATTACHMENT_URL_EXPIRY)
-    url = async_sign_path(hass, path, expiry, use_content_user=True)
-    cache[path] = (url, now + expiry)
+    expires = now + timedelta(seconds=MESSAGES_ATTACHMENT_URL_EXPIRY)
+    exp = int(expires.timestamp())
+    token = make_token(secret, entry_id, str(message_id), attachment_id, exp)
+    url = f"{path}?{TOKEN_PARAM}={token}"
+    cache[path] = (url, expires)
     return url
+
+
+def _server_link(server: WebUntis, message_id, attachment_id: str | None) -> str:
+    return async_link(
+        server.hass.data[DOMAIN][DATA_LINK_SECRET],
+        server.attachment_urls,
+        server.entry_id,
+        message_id,
+        attachment_id,
+    )
 
 
 @callback
 def async_add_attachment_links(server: WebUntis) -> None:
     """Add the "attachments" list ({name, url}) to every known message."""
     cache = server.attachment_urls
-    used: set[str] = set()
-    entry_id = server.entry_id
+    keep: dict[str, tuple[str, datetime]] = {}
 
-    def sign(path: str) -> str:
-        used.add(path)
-        return async_signed_url(server.hass, cache, path)
+    def link(message_id, attachment_id: str | None = None) -> str:
+        url = _server_link(server, message_id, attachment_id)
+        keep[url.split("?", 1)[0]] = cache[url.split("?", 1)[0]]
+        return url
 
     for message in server.messages:
         attachments = server.message_attachments.get(message["id"])
@@ -84,25 +174,20 @@ def async_add_attachment_links(server: WebUntis) -> None:
             message["attachments"] = [
                 {
                     "name": attachment["name"],
-                    "url": sign(
-                        attachment_path(entry_id, message["id"], attachment["id"])
-                    ),
+                    "url": link(message["id"], attachment["id"]),
                 }
                 for attachment in attachments
             ]
         elif message["has_attachments"]:
             # Not loaded yet (unread): the link loads them when it is opened
             message["attachments"] = [
-                {
-                    "name": MESSAGES_ATTACHMENTS_PLACEHOLDER,
-                    "url": sign(attachments_path(entry_id, message["id"])),
-                }
+                {"name": MESSAGES_ATTACHMENTS_PLACEHOLDER, "url": link(message["id"])}
             ]
         else:
             message["attachments"] = []
 
-    for path in set(cache) - used:
-        cache.pop(path)
+    cache.clear()
+    cache.update(keep)
 
 
 def _file_response(name: str, content: bytes) -> web.Response:
@@ -122,13 +207,7 @@ def _list_response(
 ) -> web.Response:
     items = "".join(
         '<li><a href="{}">{}</a></li>'.format(
-            escape(
-                async_signed_url(
-                    server.hass,
-                    server.attachment_urls,
-                    attachment_path(server.entry_id, message_id, attachment["id"]),
-                )
-            ),
+            escape(_server_link(server, message_id, attachment["id"])),
             escape(attachment["name"]),
         )
         for attachment in attachments
@@ -155,7 +234,8 @@ class WebUntisAttachmentView(HomeAssistantView):
         MESSAGES_ATTACHMENT_VIEW_URL + "/{attachment_id}"
     ]
     name = "api:webuntis:message_attachments"
-    requires_auth = True
+    # Checked in get(): a logged-in user or a valid link token
+    requires_auth = False
 
     async def get(
         self,
@@ -166,6 +246,21 @@ class WebUntisAttachmentView(HomeAssistantView):
     ) -> web.Response:
         """Return one attachment, or all attachments of a message."""
         hass: HomeAssistant = request.app["hass"]
+        secret = hass.data.get(DOMAIN, {}).get(DATA_LINK_SECRET)
+        # Other query parameters (e.g. external_auth=1) are ignored
+        if not request.get(KEY_AUTHENTICATED) and not (
+            secret
+            and verify_token(
+                secret,
+                request.query.get(TOKEN_PARAM),
+                entry_id,
+                message_id,
+                attachment_id,
+                dt_util.utcnow(),
+            )
+        ):
+            return web.Response(status=HTTPStatus.UNAUTHORIZED, text="Unauthorized")
+
         entry = hass.config_entries.async_get_entry(entry_id)
         server: WebUntis | None = None
         if entry is not None and entry.domain == DOMAIN:

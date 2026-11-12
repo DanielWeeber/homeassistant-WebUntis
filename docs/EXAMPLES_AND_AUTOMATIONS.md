@@ -232,15 +232,17 @@ to_state:
       text: Liebe Eltern, ...
       attachments: # only with the "Attachment links" option
         - name: Open attachments # unread message: loads the files when opened
-          url: /api/webuntis/<entry_id>/messages/12345/attachments?authSig=...
+          url: /api/webuntis/<entry_id>/messages/12345/attachments?token=...
 ```
 
 ---
 
 ## Push Notification with Message Attachments
 
-Requires the options **Load messages** and **Attachment links**. Every attachment `url` is a signed relative
-path (`/api/webuntis/...?authSig=...`) that the Home Assistant Companion app opens in its logged-in web view.
+Requires the options **Load messages** and **Attachment links**. Every attachment `url` is a relative path
+with a link token (`/api/webuntis/...?token=...`). The Companion app opens `/api/...` links in the browser
+chosen under *Settings → General → Open links in* (default: Safari); choose *Safari (in-app)* to keep them
+inside the app. The token works without a Home Assistant session.
 A new message is usually unread, so it has one entry `Open attachments`: one file opens directly, several
 are shown as a list of links. Tapping the notification opens the first link, the actions open each entry.
 

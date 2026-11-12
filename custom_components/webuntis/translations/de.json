@@ -346,7 +346,7 @@
           "messages": "Mitteilungen laden"
         },
         "data_description": {
-          "message_attachments": "Ergänzt den Mitteilungen-Sensor um Download-Links zu den Anhängen. Die Links erfordern eine Anmeldung in Home Assistant. Wirkt nur, wenn Mitteilungen aktiviert sind.",
+          "message_attachments": "Ergänzt den Mitteilungen-Sensor um Download-Links zu den Anhängen. Jeder Link enthält ein 7 Tage gültiges Token, Links daher wie Passwörter behandeln. Wirkt nur, wenn Mitteilungen aktiviert sind.",
           "message_attachments_unread": "Öffnet auch ungelesene Mitteilungen, um ihre Anhänge zu laden. Achtung: Dadurch werden sie in WebUntis eventuell als gelesen markiert. Ohne diese Option bekommen ungelesene Mitteilungen einen einzelnen Link, der die Anhänge erst beim Öffnen lädt.",
           "messages": "Legt den Mitteilungen-Sensor und das Ereignis für neue Mitteilungen an. Gelesen wird nur die Liste, Mitteilungen werden nicht als gelesen markiert."
         },
